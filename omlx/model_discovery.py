@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .models.sentence_transformers import is_modernbert_cross_encoder
+
 logger = logging.getLogger(__name__)
 
 ModelType = Literal["llm", "vlm", "embedding", "reranker", "audio_stt", "audio_tts", "audio_sts"]
@@ -196,15 +198,27 @@ EMBEDDING_ARCHITECTURES = {
     "ModernBertModel",
     "ModernBertForMaskedLM",
     "Qwen3ForTextEmbedding",
+    # codefuse-ai/C2LLM-7B: Qwen2 backbone with a PMA (Pooling by Multihead
+    # Attention) head. Unambiguous architecture string, so no directory
+    # heuristic is needed.
+    "C2LLMForEmbedding",
     "SiglipModel",
     "SiglipVisionModel",
     "SiglipTextModel",
 }
 
+# Bidirectional Llama rerankers (e.g. nvidia/llama-nemotron-rerank-1b-v2).
+# The architecture string alone separates them from their embedding sibling,
+# LlamaBidirectionalModel, so no directory-name heuristic is needed.
+LLAMA_BIDIRECTIONAL_RERANKER_ARCHITECTURE = (
+    "LlamaBidirectionalForSequenceClassification"
+)
+
 # Supported reranker architectures
 SUPPORTED_RERANKER_ARCHITECTURES = {
     "ModernBertForSequenceClassification",  # via mlx-embeddings
     "XLMRobertaForSequenceClassification",  # omlx native implementation
+    LLAMA_BIDIRECTIONAL_RERANKER_ARCHITECTURE,  # omlx native implementation
     "JinaForRanking",  # Jina v3 listwise reranker
 }
 
@@ -615,6 +629,12 @@ def detect_model_type(model_path: Path) -> ModelType:
             config = json.load(f)
     except (json.JSONDecodeError, IOError):
         return "llm"
+
+    # A modular SentenceTransformers CrossEncoder keeps the bare backbone
+    # architecture in config.json; its validated module chain is the more
+    # specific reranker signal and must win before embedding detection.
+    if is_modernbert_cross_encoder(model_path):
+        return "reranker"
 
     # Check architectures field for reranker first (more specific)
     architectures = config.get("architectures", [])
