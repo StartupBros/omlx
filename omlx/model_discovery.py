@@ -198,6 +198,10 @@ EMBEDDING_ARCHITECTURES = {
     "ModernBertModel",
     "ModernBertForMaskedLM",
     "Qwen3ForTextEmbedding",
+    # perplexity-ai/pplx-embed-v1-4b: Qwen3 backbone run fully
+    # bidirectionally, with sentence-transformers mean pooling. Its
+    # architecture string is distinct from plain Qwen3, so no heuristic.
+    "PPLXQwen3Model",
     # codefuse-ai/C2LLM-7B: Qwen2 backbone with a PMA (Pooling by Multihead
     # Attention) head. Unambiguous architecture string, so no directory
     # heuristic is needed.
