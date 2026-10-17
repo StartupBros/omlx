@@ -4,6 +4,10 @@
 import copy
 import importlib.util
 import json
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
 import pytest
 from huggingface_hub.errors import StrictDataclassClassValidationError
@@ -106,29 +110,49 @@ def test_missing_transformers_model_is_a_noop():
     assert compat._accept_mtp_tail_in_transformers_config() is False
 
 
-def test_registration_preserves_vendored_model_config(monkeypatch, config_module):
+def test_registration_preserves_vendored_model_config():
     # Actual mlx-vlm registration requires Apple Silicon. Config-only checks
     # above can run without MLX using pytest --noconftest.
     pytest.importorskip("mlx.core")
     pytest.importorskip("mlx_vlm")
-    monkeypatch.setattr(compat, "_APPLIED", False)
-    assert compat.apply_mlx_vlm_glm5_next_compat_patch() is True
-    wrapped = config_module.Glm5NextTextConfig.__post_init__
-    assert compat.apply_mlx_vlm_glm5_next_compat_patch() is False
-    assert config_module.Glm5NextTextConfig.__post_init__ is wrapped
+    pytest.importorskip("transformers.models.glm5_next.configuration_glm5_next")
+    # Registration reloads GLM modules. Reapplying it in the pytest worker would
+    # discard classes patched by the independent, process-wide MTP runtime.
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
+                import copy
 
-    from mlx_vlm.models.glm5_next import TextConfig
+                from transformers.models.glm5_next import configuration_glm5_next
+                from omlx.patches import mlx_vlm_glm5_next_compat as compat
 
-    text = config_module.Glm5NextTextConfig().to_dict()
-    text.update(
-        num_nextn_predict_layers=1,
-        mlp_layer_types=["dense"] * 3 + ["sparse"] * 43,
-        first_k_dense_replace=3,
-        linear_attn_config={},
+                assert compat.apply_mlx_vlm_glm5_next_compat_patch() is True
+                wrapped = configuration_glm5_next.Glm5NextTextConfig.__post_init__
+                assert compat.apply_mlx_vlm_glm5_next_compat_patch() is False
+                assert configuration_glm5_next.Glm5NextTextConfig.__post_init__ is wrapped
+
+                from mlx_vlm.models.glm5_next import TextConfig
+
+                text = configuration_glm5_next.Glm5NextTextConfig().to_dict()
+                text.update(
+                    num_nextn_predict_layers=1,
+                    mlp_layer_types=["dense"] * 3 + ["sparse"] * 43,
+                    first_k_dense_replace=3,
+                    linear_attn_config={},
+                )
+                original = copy.deepcopy(text)
+                vendor_config = TextConfig.from_dict(text)
+                config = configuration_glm5_next.Glm5NextTextConfig(**text)
+                assert len(config.mlp_layer_types) == 45
+                assert vendor_config.mlp_layer_types == ["dense"] * 3 + ["sparse"] * 43
+                assert text == original
+                """),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
-    original = copy.deepcopy(text)
-    vendor_config = TextConfig.from_dict(text)
-    config = config_module.Glm5NextTextConfig(**text)
-    assert len(config.mlp_layer_types) == 45
-    assert vendor_config.mlp_layer_types == ["dense"] * 3 + ["sparse"] * 43
-    assert text == original
+    assert result.returncode == 0, result.stdout + result.stderr
